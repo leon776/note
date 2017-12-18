@@ -1,0 +1,10 @@
+version: 0.0.1
+files:
+  - url: xiaoyouim-0.0.1-mac.zip
+    sha512: eqRY28+UY9uQNnfcS153zeO14VCBwJzUtzggaZwG0AC+/Py2Pdp61kH+noMbmZoKXpGCIRhnN3Ic9g/3bJi13Q==
+  - url: xiaoyouim-0.0.1.dmg
+    sha512: ESwjqvuXxv3+ym9E/2/yRhm+lMNwKRwAfk9Z4IpmgQkxwVCJqE2wl7t5L/y4lizDKT2nHcOdvAKHxWZ0WPApbg==
+    size: 50890948
+path: xiaoyouim-0.0.1-mac.zip
+sha512: eqRY28+UY9uQNnfcS153zeO14VCBwJzUtzggaZwG0AC+/Py2Pdp61kH+noMbmZoKXpGCIRhnN3Ic9g/3bJi13Q==
+releaseDate: '2017-12-16T10:24:41.281Z'
