@@ -1,3 +1,4 @@
+gRPC 'Error: 14 UNAVAILABLE: TCP Write failed' issue
 最近搞nodejs grpc程序部在k8s，遇到了TCP Write failed问题，查遍了各种issue，终于找到了一个靠谱的解决：http://www.longfan.me/post/devops/2020-07-09。
 防止丢失，这里复制一份
 
@@ -19,40 +20,48 @@ error 里面的第一个原因是一个"os_error":"connection reset by peer"这�
 
 通过阅读文章，原因锁定到了文章开头的一段话:_我们知道 gRPC 是基于 HTTP/2 协议的，gRPC 的 client 和 server 在交互时会建立多条连接，为了性能，这些连接都是长连接并且是一直保活的。 这段环境中不管是客户端服务还是 gRPC 服务都被调度到各个相同配置信息的 Kubernetes 节点上，这些 k8s 节点的 keep-alive 是一致的，如果出现连接主动关闭的问题，因为从 client 到 server 经历了一层 ipvs，所以最大的可能就是 ipvs 出将连接主动断开，而 client 端还不知情_
 因为我们并没有改动过 k8s 节点的net.ipv4.tcp_keepalive_time，所以经过检查我们发现系统符合出现 issue 的描述
+```
 sysctl net.ipv4.tcp_keepalive_time net.ipv4.tcp_keepalive_probes net.ipv4.tcp_keepalive_intvl
 net.ipv4.tcp_keepalive_time = 7200
 net.ipv4.tcp_keepalive_probes = 9
 net.ipv4.tcp_keepalive_intvl = 75
-
+```
 ipvsadm -l --timeout
 Timeout (tcp tcpfin udp): 900 120 300
 通过研究 net.ipv4.tcp_keepalive 的具体用途和设置方法之后，找到了解决方法
 [How to Configure Linux TCP keepalive Setting]
 
 Solution
+```
 net.ipv4.tcp_keepalive_time = 600
 net.ipv4.tcp_keepalive_probes = 9
 net.ipv4.tcp_keepalive_intvl = 30
-
+```
 600 + 9 * 30 = 870 < 900
 尝试把net.ipv4.tcp_keepalive_time + net.ipv4.tcp_keepalive_probes * net.ipv4.tcp_keepalive_intvl改成了小于 900 的值以后，经过观察和测试，貌似出现Error: 14 UNAVAILABLE: TCP Write failed错误信息的概率变小了, 问题看起来暂时解决了一部分，准备再观察一段时间看看情况。
 Solution+
 观察了一晚上，发现Error: 14 UNAVAILABLE: TCP Write failed还是存在，如果理论上出现错误的原因是找正确了的，那么问题就出在解决问题的方法是否有效上面了。
 在所有宿主机上面观察了net.ipv4.tcp_keepalive*的设置都是正确的
+```
 sysctl net.ipv4.tcp_keepalive_time net.ipv4.tcp_keepalive_probes net.ipv4.tcp_keepalive_intvl
 net.ipv4.tcp_keepalive_time = 600
 net.ipv4.tcp_keepalive_probes = 9
 net.ipv4.tcp_keepalive_intvl = 30
+```
 但是容器里面真实的情况呢？
 进入容器之后运行同样的命令，发现令人沮丧的消息
+```
 sysctl net.ipv4.tcp_keepalive_time net.ipv4.tcp_keepalive_probes net.ipv4.tcp_keepalive_intvl
 net.ipv4.tcp_keepalive_time = 7200
 net.ipv4.tcp_keepalive_probes = 9
 net.ipv4.tcp_keepalive_intvl = 75
+```
 宿主机的sysctl设置并没有进入容器，看来 namespace 的隔离还是非常彻底的，查阅了一些资料发现，如果要设置容器内部的net.ipv4.tcp_keepalive*，会涉及到使用非安全的内核设置，需要使用priviliegedPOD 设置，不太安全[Reference][https://stackoverflow.com/questions/54552379/tcp-keepalive-time-in-docker-container/54564456#54564456].看看能不能另辟蹊径。
 通过阅读grpc库的[C++文档][https://grpc.github.io/grpc/cpp/md_doc_keepalive.html]我们发现可以使用一些设置来注入grpc库，来改变库本身的对于 tcp keepalive 的频率设置。
 GRPC_ARG_KEEPALIVE_TIME_MS可以设置库对于 keepalive 探针时间的频率，我们可以设置得小于等于 900 秒，同时打开设置GRPC_ARG_KEEPALIVE_PERMIT_WITHOUT_CALLS允许没有请求的时候也发送 keepalive 探针，GRPC_ARG_HTTP2_MAX_PINGS_WITHOUT_DATA设为 0 避免服务端认为过高频率的探针是恶意探针而屏蔽掉。以 nodejs 为例
-const grpcClient = new GrpcService(
+```
+const Client = grpc.makeGenericClientConstructor({}, null, null);
+const grpcClient = new Client(
   process.env.GRPC_SERVER_URL,
   grpc.credentials.createInsecure(),
   {
@@ -63,6 +72,7 @@ const grpcClient = new GrpcService(
     'grpc.http2.max_pings_without_data': parseInt(
       process.env.GRPC_ARG_HTTP2_MAX_PINGS_WITHOUT_DATA || '2',
     ),
-  },
-);  );
+  }
+);
+```
 又观察了一晚上发现没有任何报错了，问题解决。
